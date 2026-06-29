@@ -1,0 +1,22 @@
+[
+  {
+    "content": "[P1-1] Install Python deps (google-genai, google-auth, google-api-python-client, psycopg2-binary, sqlalchemy) and update pyproject.toml metadata",
+    "id": "1",
+    "status": "completed"
+  },
+  {
+    "content": "[P1-2] Build backend: Gmail OAuth flow, Gmail API service, AI classifier with Gemini, DB schema/migrations, API routes",
+    "id": "2",
+    "status": "completed"
+  },
+  {
+    "content": "[P1-3] Build frontend: Gmail connection onboarding, scan dashboard, category breakdown charts, review queue, run history",
+    "id": "3",
+    "status": "completed"
+  },
+  {
+    "content": "[P1-4] Update project metadata (package.json, index.html title) and test end-to-end",
+    "id": "4",
+    "status": "completed"
+  }
+]

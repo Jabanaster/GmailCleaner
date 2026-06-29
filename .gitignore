@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.egg-info/
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+.pytest_cache/
+extension/dist/
+.workshop/
+coverage/

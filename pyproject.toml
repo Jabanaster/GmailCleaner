@@ -1,0 +1,32 @@
+[project]
+name = "gmail-email-sorter-cleaner"
+version = "0.1.0"
+description = "Gmail email sorter and cleaner with AI classification"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.135.1",
+    "uvicorn==0.41.0",
+    "httpx==0.28.1",
+    "python-multipart==0.0.22",
+    "watchfiles==1.1.1",
+    "google-genai>=2.8.0",
+    "google-auth>=2.53.0",
+    "google-auth-oauthlib>=1.4.0",
+    "google-auth-httplib2>=0.4.0",
+    "google-api-python-client>=2.197.0",
+    "psycopg2-binary>=2.9.12",
+    "sqlalchemy>=2.0.50",
+    "PyJWT>=2.10.1",
+    "pytest>=8.3.5",
+    "itsdangerous>=2.2.0",
+]
+
+[tool.uv]
+exclude-newer = "14 days"
+# workshop-connect is published by us; exempt from the rolling window.
+exclude-newer-package = { workshop-connect = "2027-01-01" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Google Email Organizer",
+  "version": "0.2.0",
+  "description": "A companion for previewing safe, AI-assisted Gmail organization.",
+  "permissions": ["identity", "storage", "alarms", "notifications", "sidePanel"],
+  "host_permissions": [
+    "https://gmail.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "oauth2": {
+    "client_id": "YOUR_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Email Organizer"
+  },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["src/content.js"]
+    }
+  ]
+}

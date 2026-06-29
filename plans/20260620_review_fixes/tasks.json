@@ -1,0 +1,42 @@
+[
+  {
+    "content": "[P2-1] Fix routes.py: Add missing imports (datetime, BaseModel) and fix type annotations",
+    "id": "1",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-2] Fix gmail_service.py: Add missing imports and fix ensure_labels_exist error handling",
+    "id": "2",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-3] Fix classifier.py: Add error handling for API failures and improve prompt",
+    "id": "3",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-4] Add toast notifications to frontend for user feedback",
+    "id": "4",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-5] Add retry logic for Gmail API calls and improve error handling",
+    "id": "5",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-6] Add progress tracking for scan operations",
+    "id": "6",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-7] Add missing UI components (toast, sonner integration)",
+    "id": "7",
+    "status": "completed"
+  },
+  {
+    "content": "[P2-8] Add deployment script and update README",
+    "id": "8",
+    "status": "completed"
+  }
+]
