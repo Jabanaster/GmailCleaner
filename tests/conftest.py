@@ -19,6 +19,8 @@ CREATE TABLE email_classifications (id INTEGER PRIMARY KEY, run_id INTEGER, user
 CREATE TABLE gmail_oauth_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, access_token TEXT, refresh_token TEXT, token_expiry TIMESTAMP, scopes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE gmail_labels (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT NOT NULL, label_name TEXT NOT NULL, gmail_label_id TEXT, category TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_email, label_name));
 CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE operation_batches (id INTEGER PRIMARY KEY, user_email TEXT NOT NULL, scan_run_id INTEGER, dry_run BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'running', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP, total_processed INTEGER DEFAULT 0, total_failed INTEGER DEFAULT 0);
+CREATE TABLE email_action_logs (id INTEGER PRIMARY KEY, operation_batch_id INTEGER, scan_run_id INTEGER, user_email TEXT NOT NULL, gmail_message_id TEXT NOT NULL, planned_action TEXT, executed_action TEXT, category TEXT, confidence REAL, pre_label_ids TEXT, post_label_ids TEXT, archived_before BOOLEAN DEFAULT FALSE, trashed_before BOOLEAN DEFAULT FALSE, error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 """
 
 

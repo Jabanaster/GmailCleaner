@@ -403,7 +403,24 @@ def create_app(static_dir: str) -> FastAPI:
                 row = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).fetchone()
                 return row[0] if row else "failed"
 
+        batch_id = None
         try:
+            # Create operation batch
+            with engine.connect() as conn:
+                conn.execute(text("""
+                    INSERT INTO operation_batches (user_email, scan_run_id, dry_run, status)
+                    VALUES (:email, :scan_run_id, :dry_run, 'running')
+                """), {
+                    "email": user_email,
+                    "scan_run_id": run_id,
+                    "dry_run": dry_run
+                })
+                conn.commit()
+                # Query for batch ID
+                batch_id = conn.execute(text("""
+                    SELECT id FROM operation_batches WHERE scan_run_id = :scan_run_id
+                """), {"scan_run_id": run_id}).scalar()
+
             # Ensure labels exist
             if not dry_run:
                 execute_gmail_api_with_quota_backoff(lambda: gs.ensure_labels_exist(user_email))
@@ -455,14 +472,26 @@ def create_app(static_dir: str) -> FastAPI:
                 # Classify with AI
                 classifications = clf.classify_batch(email_details)
 
+                # Build details map for quick lookup of pre-action metadata
+                details_map = {d["id"]: d for d in email_details}
+
                 # Process each classification
                 for cls in classifications:
                     if get_current_status() in ("stopping", "stopped"):
                         break
                     msg_id = cls["message_id"]
                     action_taken = "none"
+                    planned_action = "none"
+                    error_msg = None
+
+                    # Extract pre-action labels
+                    detail = details_map.get(msg_id, {})
+                    label_ids = detail.get("label_ids", [])
+                    archived_before = "INBOX" not in label_ids
+                    trashed_before = "TRASH" in label_ids
 
                     if cls["is_crap"]:
+                        planned_action = "trash"
                         if dry_run:
                             action_taken = "preview"
                             total_trashed += 1
@@ -476,9 +505,11 @@ def create_app(static_dir: str) -> FastAPI:
                                 total_crap += 1
                             except RuntimeError as re:
                                 raise re
-                            except Exception:
+                            except Exception as e:
                                 action_taken = "trash_failed"
+                                error_msg = str(e)[:500]
                     elif cls["category"]:
+                        planned_action = "label"
                         if dry_run:
                             action_taken = "preview"
                             total_labeled += 1
@@ -494,8 +525,23 @@ def create_app(static_dir: str) -> FastAPI:
                                     total_categorized += 1
                                 except RuntimeError as re:
                                     raise re
-                                except Exception:
+                                except Exception as e:
                                     action_taken = "label_failed"
+                                    error_msg = str(e)[:500]
+
+                    # Determine post-action labels if applicable
+                    post_label_ids = None
+                    if not dry_run and action_taken == "labeled":
+                        post_labels = list(label_ids)
+                        label_id = gs.get_label_id(user_email, cls["category"])
+                        if label_id and label_id not in post_labels:
+                            post_labels.append(label_id)
+                        post_label_ids = json.dumps(post_labels)
+                    elif not dry_run and action_taken == "trashed":
+                        post_labels = list(label_ids)
+                        if "TRASH" not in post_labels:
+                            post_labels.append("TRASH")
+                        post_label_ids = json.dumps(post_labels)
 
                     # Store classification
                     with engine.connect() as conn:
@@ -516,6 +562,31 @@ def create_app(static_dir: str) -> FastAPI:
                             "crap_reason": cls.get("crap_reason"),
                             "confidence": cls.get("confidence", 0.0),
                             "action": action_taken,
+                        })
+
+                        # Log email action in email_action_logs
+                        conn.execute(text("""
+                            INSERT INTO email_action_logs
+                                (operation_batch_id, scan_run_id, user_email, gmail_message_id,
+                                 planned_action, executed_action, category, confidence,
+                                 pre_label_ids, post_label_ids, archived_before, trashed_before, error_message)
+                            VALUES (:batch_id, :run_id, :email, :msg_id,
+                                    :planned, :executed, :category, :confidence,
+                                    :pre_labels, :post_labels, :archived, :trashed, :error)
+                        """), {
+                            "batch_id": batch_id,
+                            "run_id": run_id,
+                            "email": user_email,
+                            "msg_id": msg_id,
+                            "planned": planned_action,
+                            "executed": "preview" if dry_run else (action_taken if action_taken != "none" else "no_mutation"),
+                            "category": cls.get("category"),
+                            "confidence": cls.get("confidence", 0.0),
+                            "pre_labels": json.dumps(label_ids),
+                            "post_labels": post_label_ids,
+                            "archived": archived_before,
+                            "trashed": trashed_before,
+                            "error": error_msg,
                         })
                         conn.commit()
 
@@ -552,6 +623,13 @@ def create_app(static_dir: str) -> FastAPI:
                         "trashed": total_trashed,
                         "labeled": total_labeled,
                     })
+                    if batch_id is not None:
+                        conn.execute(text("""
+                            UPDATE operation_batches
+                            SET status = 'stopped', completed_at = NOW(),
+                                total_processed = :scanned
+                            WHERE id = :batch_id
+                        """), {"batch_id": batch_id, "scanned": total_scanned})
                     conn.commit()
             else:
                 with engine.connect() as conn:
@@ -570,9 +648,27 @@ def create_app(static_dir: str) -> FastAPI:
                         "trashed": total_trashed,
                         "labeled": total_labeled,
                     })
+                    if batch_id is not None:
+                        conn.execute(text("""
+                            UPDATE operation_batches
+                            SET status = 'completed', completed_at = NOW(),
+                                total_processed = :scanned
+                            WHERE id = :batch_id
+                        """), {"batch_id": batch_id, "scanned": total_scanned})
                     conn.commit()
 
         except Exception as e:
+            if batch_id is not None:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text("""
+                            UPDATE operation_batches
+                            SET status = 'failed', completed_at = NOW()
+                            WHERE id = :batch_id
+                        """), {"batch_id": batch_id})
+                        conn.commit()
+                except Exception:
+                    pass
             fail(str(e)[:500])
 
 
