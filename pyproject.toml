@@ -20,6 +20,7 @@ dependencies = [
     "PyJWT>=2.10.1",
     "pytest>=8.3.5",
     "itsdangerous>=2.2.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.uv]
