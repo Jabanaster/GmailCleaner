@@ -21,6 +21,7 @@ CREATE TABLE gmail_labels (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT
 CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE operation_batches (id INTEGER PRIMARY KEY, user_email TEXT NOT NULL, scan_run_id INTEGER, dry_run BOOLEAN DEFAULT FALSE, status TEXT DEFAULT 'running', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, completed_at TIMESTAMP, total_processed INTEGER DEFAULT 0, total_failed INTEGER DEFAULT 0);
 CREATE TABLE email_action_logs (id INTEGER PRIMARY KEY, operation_batch_id INTEGER, scan_run_id INTEGER, user_email TEXT NOT NULL, gmail_message_id TEXT NOT NULL, planned_action TEXT, executed_action TEXT, category TEXT, confidence REAL, pre_label_ids TEXT, post_label_ids TEXT, archived_before BOOLEAN DEFAULT FALSE, trashed_before BOOLEAN DEFAULT FALSE, error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE recovery_action_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, operation_batch_id INTEGER, scan_run_id INTEGER, user_email TEXT NOT NULL, gmail_message_id TEXT NOT NULL, recovery_action TEXT, status TEXT NOT NULL, error_message TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 """
 
 

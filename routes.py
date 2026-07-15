@@ -21,11 +21,18 @@ import classifier as clf
 from config import load_settings
 from extension_auth import upsert_dashboard_user
 from extension_routes import create_extension_router
-from recovery_utils import generate_recovery_preview
+from recovery_utils import generate_recovery_preview, execute_recovery
 
 class RecoveryPreviewRequest(BaseModel):
     operation_batch_id: int | None = None
     scan_run_id: int | None = None
+
+class RecoveryExecuteRequest(BaseModel):
+    operation_batch_id: int | None = None
+    scan_run_id: int | None = None
+    confirm_execute: bool
+    handle_high_risk: bool = False
+
 
 
 
@@ -312,6 +319,34 @@ def create_app(static_dir: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Operation batch or scan run not found")
 
         return preview
+
+    @api.post("/recovery/execute")
+    def recovery_execute(request: Request, body: RecoveryExecuteRequest):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        if not body.confirm_execute:
+            raise HTTPException(status_code=400, detail="Missing explicit confirmation (confirm_execute: true)")
+
+        if body.operation_batch_id is None and body.scan_run_id is None:
+            raise HTTPException(status_code=400, detail="Either operation_batch_id or scan_run_id must be provided")
+
+        engine = get_engine()
+        val = body.operation_batch_id if body.operation_batch_id is not None else body.scan_run_id
+        summary = execute_recovery(
+            user_email=email,
+            batch_id_or_run_id=val,
+            confirm_execute=body.confirm_execute,
+            handle_high_risk=body.handle_high_risk,
+            engine=engine
+        )
+
+        if not summary:
+            raise HTTPException(status_code=404, detail="Operation batch or scan run not found")
+
+        return summary
+
 
 
 

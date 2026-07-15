@@ -118,3 +118,117 @@ def generate_recovery_preview(user_email: str, batch_id_or_run_id: int, engine) 
             "warning_list": warning_list,
             "per_message_preview": per_message_preview
         }
+
+
+def execute_recovery(user_email: str, batch_id_or_run_id: int, confirm_execute: bool, handle_high_risk: bool, engine) -> dict | None:
+    if not confirm_execute:
+        return None
+
+    preview = generate_recovery_preview(user_email, batch_id_or_run_id, engine)
+    if not preview:
+        return None
+
+    batch_id = preview["operation_batch_id"]
+    scan_run_id = preview["scan_run_id"]
+
+    attempted = 0
+    succeeded = 0
+    skipped = 0
+    failed = 0
+    high_risk_skipped = 0
+
+    import gmail_service as gs
+    service = None
+
+    for msg in preview["per_message_preview"]:
+        msg_id = msg["gmail_message_id"]
+        planned_recovery = msg["planned_recovery_action"]
+        recoverable = msg["recoverable"]
+        risk_level = msg["risk_level"]
+
+        status = "skipped"
+        err_msg = None
+
+        if not recoverable:
+            skipped += 1
+            status = "skipped"
+            _log_recovery_action(engine, batch_id, scan_run_id, user_email, msg_id, planned_recovery, status, err_msg)
+            continue
+
+        if risk_level == "high" and not handle_high_risk:
+            high_risk_skipped += 1
+            status = "high_risk_skipped"
+            _log_recovery_action(engine, batch_id, scan_run_id, user_email, msg_id, planned_recovery, status, err_msg)
+            continue
+
+        if service is None:
+            try:
+                service = gs.build_gmail_service(user_email)
+            except Exception as e:
+                failed += 1
+                status = "failed"
+                err_msg = f"Failed to build Gmail service: {str(e)}"
+                _log_recovery_action(engine, batch_id, scan_run_id, user_email, msg_id, planned_recovery, status, err_msg)
+                continue
+
+        attempted += 1
+
+        try:
+            if planned_recovery == "remove_label":
+                label_id = gs.get_label_id(user_email, msg["category"])
+                if label_id:
+                    gs.retry_api_call(lambda: service.users().messages().modify(
+                        userId="me", id=msg_id, body={"removeLabelIds": [label_id]}
+                    ).execute())
+                else:
+                    raise ValueError(f"Label ID for category '{msg['category']}' not found in database.")
+            elif planned_recovery == "untrash":
+                gs.retry_api_call(lambda: service.users().messages().untrash(
+                    userId="me", id=msg_id
+                ).execute())
+            elif planned_recovery in ("restore_inbox", "unarchive"):
+                gs.retry_api_call(lambda: service.users().messages().modify(
+                    userId="me", id=msg_id, body={"addLabelIds": ["INBOX"]}
+                ).execute())
+            
+            succeeded += 1
+            status = "success"
+        except Exception as e:
+            failed += 1
+            status = "failed"
+            err_msg = str(e)[:500]
+
+        _log_recovery_action(engine, batch_id, scan_run_id, user_email, msg_id, planned_recovery, status, err_msg)
+
+    return {
+        "operation_batch_id": batch_id,
+        "scan_run_id": scan_run_id,
+        "attempted": attempted,
+        "succeeded": succeeded,
+        "skipped": skipped,
+        "failed": failed,
+        "high_risk_skipped": high_risk_skipped,
+        "warnings": preview["warning_list"]
+    }
+
+
+def _log_recovery_action(engine, batch_id, scan_run_id, user_email, msg_id, action, status, error_message):
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO recovery_action_logs (
+                operation_batch_id, scan_run_id, user_email, gmail_message_id,
+                recovery_action, status, error_message
+            ) VALUES (
+                :batch_id, :run_id, :email, :msg_id, :action, :status, :error
+            )
+        """), {
+            "batch_id": batch_id,
+            "run_id": scan_run_id,
+            "email": user_email,
+            "msg_id": msg_id,
+            "action": action,
+            "status": status,
+            "error": error_message
+        })
+        conn.commit()
+
