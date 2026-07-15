@@ -423,3 +423,104 @@ def test_scan_dry_run_no_mutations_called(monkeypatch, engine, settings):
         assert len(classes) == 2
         assert classes[0] == ("msg1", True, None, "preview")
         assert classes[1] == ("msg2", False, "work", "preview")
+
+
+def test_scan_pause_and_resume(monkeypatch, engine, settings):
+    app = make_app(monkeypatch, engine, settings)
+    client = TestClient(app)
+    client.cookies.set("session", session_cookie(settings, "user-a", "a@example.test"))
+
+    # 1. Create a scan run with status 'running'
+    with engine.connect() as conn:
+        conn.execute(text("INSERT INTO scan_runs (user_email, status) VALUES ('a@example.test', 'running')"))
+        conn.commit()
+        run_id = conn.execute(text("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1")).scalar()
+
+    # 2. Call pause endpoint
+    response_pause = client.post("/api/scan/pause")
+    assert response_pause.status_code == 200
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).scalar()
+        assert status == "paused"
+
+    # 3. Call resume endpoint
+    response_resume = client.post("/api/scan/resume")
+    assert response_resume.status_code == 200
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).scalar()
+        assert status == "running"
+
+
+def test_scan_stop_endpoint(monkeypatch, engine, settings):
+    app = make_app(monkeypatch, engine, settings)
+    client = TestClient(app)
+    client.cookies.set("session", session_cookie(settings, "user-a", "a@example.test"))
+
+    # 1. Create a scan run with status 'running'
+    with engine.connect() as conn:
+        conn.execute(text("INSERT INTO scan_runs (user_email, status) VALUES ('a@example.test', 'running')"))
+        conn.commit()
+        run_id = conn.execute(text("SELECT id FROM scan_runs ORDER BY id DESC LIMIT 1")).scalar()
+
+    # 2. Call stop endpoint
+    response_stop = client.post("/api/scan/stop")
+    assert response_stop.status_code == 200
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).scalar()
+        assert status == "stopping"
+
+
+def test_scan_stop_execution(monkeypatch, engine, settings):
+    messages = [
+        {"id": "msg1", "thread_id": "t1", "subject": "First message", "from": "boss@work.com", "snippet": "Notes", "label_ids": ["INBOX"]},
+        {"id": "msg2", "thread_id": "t2", "subject": "Second message", "from": "boss@work.com", "snippet": "Notes", "label_ids": ["INBOX"]},
+    ]
+    service = MockService(messages=messages)
+    monkeypatch.setattr(gs, "build_gmail_service", lambda email: service)
+    monkeypatch.setattr(gs, "get_stored_tokens", lambda email: {"access_token": "abc", "refresh_token": "xyz"})
+    monkeypatch.setattr(gs, "get_oauth_config", lambda: {"client_id": "fake_id", "client_secret": "fake_secret", "configured": True})
+    monkeypatch.setattr(clf, "classify_batch", mock_classify_batch)
+    monkeypatch.setattr(threading, "Thread", MockSyncThread)
+
+    # We want to trigger a stop mid-scan. We can intercept in fetch_message_detail
+    def mock_fetch_detail(email, msg_id):
+        # Trigger stop in DB
+        with engine.connect() as conn:
+            conn.execute(text("UPDATE scan_runs SET status = 'stopping'"))
+            conn.commit()
+        return {"id": msg_id, "thread_id": "t1", "subject": "test", "from": "test", "snippet": "test", "label_ids": []}
+
+    monkeypatch.setattr(gs, "fetch_message_detail", mock_fetch_detail)
+
+    app = make_app(monkeypatch, engine, settings)
+    client = TestClient(app)
+    client.cookies.set("session", session_cookie(settings, "user-a", "a@example.test"))
+
+    response = client.post("/api/scan/start")
+    assert response.status_code == 200
+    run_id = response.json()["run_id"]
+
+    # Verify status is stopped
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).scalar()
+        assert status == "stopped"
+
+
+def test_active_scan_guard_with_paused_states(monkeypatch, engine, settings):
+    monkeypatch.setattr(gs, "get_oauth_config", lambda: {"client_id": "fake_id", "client_secret": "fake_secret", "configured": True})
+
+    # Setup scan_runs with a 'paused' scan
+    with engine.connect() as conn:
+        conn.execute(text("INSERT INTO scan_runs (user_email, status) VALUES ('a@example.test', 'paused')"))
+        conn.commit()
+
+    app = make_app(monkeypatch, engine, settings)
+    client = TestClient(app)
+    client.cookies.set("session", session_cookie(settings, "user-a", "a@example.test"))
+
+    # Trying to start a scan should return conflict (409)
+    response = client.post("/api/scan/start")
+    assert response.status_code == 409
+    assert "A scan is already running" in response.json()["detail"]
+
+

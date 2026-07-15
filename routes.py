@@ -152,7 +152,7 @@ def create_app(static_dir: str) -> FastAPI:
             return {"running": False, "email": email, "last_run": None, "classifications": []}
 
         return {
-            "running": latest[1] == "running",
+            "running": latest[1] in ("running", "paused", "stopping"),
             "email": email,
             "last_run": {
                 "id": latest[0],
@@ -198,7 +198,7 @@ def create_app(static_dir: str) -> FastAPI:
         engine = get_engine()
         with engine.connect() as conn:
             running = conn.execute(text("""
-                SELECT id FROM scan_runs WHERE user_email = :email AND status = 'running'
+                SELECT id FROM scan_runs WHERE user_email = :email AND status IN ('running', 'paused', 'stopping')
             """), {"email": email}).fetchone()
 
         if running:
@@ -222,6 +222,74 @@ def create_app(static_dir: str) -> FastAPI:
         thread.start()
 
         return {"run_id": run_id, "status": "running", "message": "Scan started"}
+
+    @api.post("/scan/pause")
+    def scan_pause(request: Request):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            active_run = conn.execute(text("""
+                SELECT id FROM scan_runs WHERE user_email = :email AND status = 'running'
+            """), {"email": email}).fetchone()
+
+            if not active_run:
+                raise HTTPException(status_code=400, detail="No active running scan to pause")
+
+            conn.execute(text("""
+                UPDATE scan_runs SET status = 'paused' WHERE id = :id
+            """), {"id": active_run[0]})
+            conn.commit()
+
+        return {"ok": True, "message": "Scan paused"}
+
+    @api.post("/scan/resume")
+    def scan_resume(request: Request):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            paused_run = conn.execute(text("""
+                SELECT id FROM scan_runs WHERE user_email = :email AND status = 'paused'
+            """), {"email": email}).fetchone()
+
+            if not paused_run:
+                raise HTTPException(status_code=400, detail="No paused scan to resume")
+
+            conn.execute(text("""
+                UPDATE scan_runs SET status = 'running' WHERE id = :id
+            """), {"id": paused_run[0]})
+            conn.commit()
+
+        return {"ok": True, "message": "Scan resumed"}
+
+    @api.post("/scan/stop")
+    def scan_stop(request: Request):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            active_run = conn.execute(text("""
+                SELECT id FROM scan_runs 
+                WHERE user_email = :email AND status IN ('running', 'paused')
+            """), {"email": email}).fetchone()
+
+            if not active_run:
+                raise HTTPException(status_code=400, detail="No active scan to stop")
+
+            conn.execute(text("""
+                UPDATE scan_runs SET status = 'stopping' WHERE id = :id
+            """), {"id": active_run[0]})
+            conn.commit()
+
+        return {"ok": True, "message": "Scan stop initiated"}
+
 
     # ─── Get run history ───
     @api.get("/scan/history")
@@ -330,6 +398,11 @@ def create_app(static_dir: str) -> FastAPI:
                 """), {"id": run_id, "msg": msg})
                 conn.commit()
 
+        def get_current_status():
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT status FROM scan_runs WHERE id = :id"), {"id": run_id}).fetchone()
+                return row[0] if row else "failed"
+
         try:
             # Ensure labels exist
             if not dry_run:
@@ -347,7 +420,16 @@ def create_app(static_dir: str) -> FastAPI:
                 conn.commit()
 
             # Process in batches
-            for i in range(0, total, batch_size):
+            i = 0
+            while i < total:
+                # Check status
+                status = get_current_status()
+                if status in ("stopping", "stopped"):
+                    break
+                if status == "paused":
+                    time.sleep(1)
+                    continue
+
                 # Batch pacing delay (except before first batch)
                 if i > 0 and batch_delay > 0:
                     time.sleep(batch_delay)
@@ -357,6 +439,8 @@ def create_app(static_dir: str) -> FastAPI:
                 # Fetch message details
                 email_details = []
                 for msg_ref in batch:
+                    if get_current_status() in ("stopping", "stopped"):
+                        break
                     try:
                         detail = execute_gmail_api_with_quota_backoff(lambda ref=msg_ref: gs.fetch_message_detail(user_email, ref["id"]))
                         email_details.append(detail)
@@ -365,11 +449,16 @@ def create_app(static_dir: str) -> FastAPI:
                     except Exception:
                         continue
 
+                if get_current_status() in ("stopping", "stopped"):
+                    break
+
                 # Classify with AI
                 classifications = clf.classify_batch(email_details)
 
                 # Process each classification
                 for cls in classifications:
+                    if get_current_status() in ("stopping", "stopped"):
+                        break
                     msg_id = cls["message_id"]
                     action_taken = "none"
 
@@ -432,6 +521,9 @@ def create_app(static_dir: str) -> FastAPI:
 
                     total_scanned += 1
 
+                if get_current_status() in ("stopping", "stopped"):
+                    break
+
                 # Update progress periodically
                 with engine.connect() as conn:
                     conn.execute(text("""
@@ -439,24 +531,46 @@ def create_app(static_dir: str) -> FastAPI:
                     """), {"scanned": total_scanned, "id": run_id})
                     conn.commit()
 
-            # Mark complete
-            with engine.connect() as conn:
-                conn.execute(text("""
-                    UPDATE scan_runs
-                    SET status = 'completed', completed_at = NOW(),
-                        total_scanned = :scanned, total_crap = :crap,
-                        total_categorized = :categorized, total_trashed = :trashed,
-                        total_labeled = :labeled
-                    WHERE id = :id
-                """), {
-                    "id": run_id,
-                    "scanned": total_scanned,
-                    "crap": total_crap,
-                    "categorized": total_categorized,
-                    "trashed": total_trashed,
-                    "labeled": total_labeled,
-                })
-                conn.commit()
+                i += batch_size
+
+            # Mark completed or stopped
+            final_status = get_current_status()
+            if final_status in ("stopping", "stopped"):
+                with engine.connect() as conn:
+                    conn.execute(text("""
+                        UPDATE scan_runs
+                        SET status = 'stopped', completed_at = NOW(),
+                            total_scanned = :scanned, total_crap = :crap,
+                            total_categorized = :categorized, total_trashed = :trashed,
+                            total_labeled = :labeled
+                        WHERE id = :id
+                    """), {
+                        "id": run_id,
+                        "scanned": total_scanned,
+                        "crap": total_crap,
+                        "categorized": total_categorized,
+                        "trashed": total_trashed,
+                        "labeled": total_labeled,
+                    })
+                    conn.commit()
+            else:
+                with engine.connect() as conn:
+                    conn.execute(text("""
+                        UPDATE scan_runs
+                        SET status = 'completed', completed_at = NOW(),
+                            total_scanned = :scanned, total_crap = :crap,
+                            total_categorized = :categorized, total_trashed = :trashed,
+                            total_labeled = :labeled
+                        WHERE id = :id
+                    """), {
+                        "id": run_id,
+                        "scanned": total_scanned,
+                        "crap": total_crap,
+                        "categorized": total_categorized,
+                        "trashed": total_trashed,
+                        "labeled": total_labeled,
+                    })
+                    conn.commit()
 
         except Exception as e:
             fail(str(e)[:500])
