@@ -12,7 +12,7 @@
   ],
   "optional_host_permissions": ["https://*/*"],
   "oauth2": {
-    "client_id": "YOUR_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "client_id": "384738307933-lfpga2v6l2magcpivjhso7o8orh1u0lc.apps.googleusercontent.com",
     "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
   },
   "background": {

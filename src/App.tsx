@@ -257,7 +257,13 @@ function App() {
       window.history.replaceState({}, "", "/");
       fetchStatus().then(fetchDevices);
     } else if (params.get("oauth_error")) {
-      setError(`OAuth error: ${params.get("oauth_error")}`);
+      const oauthError = params.get("oauth_error") ?? "unknown";
+      const message =
+        oauthError === "invalid_state"
+          ? "Sign-in session expired or was interrupted. Click Connect Gmail again."
+          : `OAuth error: ${oauthError}`;
+      setError(message);
+      toast({ title: "Gmail sign-in failed", description: message, variant: "destructive" });
       window.history.replaceState({}, "", "/");
     }
   }, [fetchStatus, fetchDevices]);

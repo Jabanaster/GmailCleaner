@@ -24,12 +24,21 @@ CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAM
 
 @pytest.fixture
 def settings():
+    os.environ["OAUTH_TOKEN_ENCRYPTION_KEY"] = "m1y6C2fHWhlS9v_P7r7Y1T3Nf8u_k3zL0d3J-5s3o9o="
     return Settings(
         app_env="development", public_api_base_url="http://localhost:8000", allowed_web_origins=("http://localhost:5173",),
         allowed_extension_ids=("abcdefghijklmnopabcdefghijklmnop",), jwt_issuer="google-email-organizer-api",
         jwt_audience="google-email-organizer-extension", jwt_signing_secret="test-signing-secret-that-is-at-least-32-characters",
         access_token_ttl_seconds=600, refresh_token_ttl_seconds=2_592_000, pairing_code_ttl_seconds=600,
+        oauth_token_encryption_key="m1y6C2fHWhlS9v_P7r7Y1T3Nf8u_k3zL0d3J-5s3o9o=",
+        scan_batch_size=10,
+        scan_batch_delay_ms=0,
+        gmail_quota_backoff_ms=0,
+        gmail_max_retry_attempts=3,
     )
+
+
+
 
 
 @pytest.fixture
@@ -38,8 +47,10 @@ def engine():
     import datetime
     value = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     @event.listens_for(value, "connect")
-    def register_now(dbapi_connection, connection_record):
+    def register_sqlite_funcs(dbapi_connection, connection_record):
         dbapi_connection.create_function("now", 0, lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
+        dbapi_connection.create_function("to_timestamp", 1, lambda val: datetime.datetime.fromtimestamp(val, datetime.timezone.utc).isoformat() if val is not None else None)
+
 
     with value.begin() as conn:
         for statement in SCHEMA.split(";"):

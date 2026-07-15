@@ -57,7 +57,7 @@ export async function backendRequest<T>(path: string, options: RequestOptions = 
 }
 
 export const backend = {
-  health: () => backendRequest<unknown>("/health"),
+  health: () => backendRequest<unknown>("/api/health"),
   pair: (pairingCode: string, deviceName: string, extensionVersion: string) => backendRequest<PairResponse>("/api/extension/pair", { method: "POST", body: { pairing_code: pairingCode, device_name: deviceName, extension_version: extensionVersion } }),
   refresh: (refreshToken: string) => backendRequest<RefreshResponse>("/api/extension/auth/refresh", { method: "POST", body: { refresh_token: refreshToken } }),
   me: <T>(token: string) => backendRequest<T>("/api/extension/auth/me", { accessToken: token }),

@@ -179,39 +179,44 @@ The extension uses only `gmail.readonly` for its own Gmail access. Gmail tokens 
 
 * **Phase 1 — Dashboard, Backend, Gmail API**: Complete
 * **Phase 2A — Extension skeleton + Gmail readonly**: Complete
-* **Phase 2B automated security gate**: Complete (25 tests passing)
+* **Phase 2B automated security gate**: Complete (34 tests passing)
 * **Review-fix reconciliation**: Complete
 * **Dry-run preview feature**: Implemented and reconciled, but not live-validated
-* **Phase 2C live environment validation**: Pending
+* **Phase 2C live environment validation**: Complete (Passed)
 * **Phase 3 overall**: Not authorized as complete
 
-> [!IMPORTANT]
-> The application is not yet production-ready. Several live Phase 2C validation blockers (such as Neon migration, live OAuth credentials, HTTPS, and live pairing) must be resolved.
+> [!NOTE]
+> Phase 2C live validation is complete and all gates (OAuth, pairing, read-only preview, Gemini preview, refresh rotation, and CORS) have passed.
 
-## Reliability Improvements (Phase 2C)
+## Pre-Release Hardening & Blockers
 
-- **Retry logic**: All Gmail API calls (`fetch_messages`, `fetch_message_detail`, `trash_message`, `add_label_to_message`, `remove_from_inbox`, `get_user_profile`, `ensure_labels_exist`) use exponential backoff (up to 3 retries, doubling delay starting at 1s).
-- **Scan progress tracking**: The `scan_runs` table stores `total_emails` so the dashboard can display a real percentage progress bar during active scans.
-- **Toast notifications**: All user-facing actions (connect, disconnect, scan start/fail, device revoke) show toast notifications.
+The following items must be resolved or noted before final release:
+
+1. **Token Encryption**: Dashboard Gmail OAuth refresh tokens are encrypted at rest using Fernet authenticated encryption (`OAUTH_TOKEN_ENCRYPTION_KEY`). Legacy plaintext tokens are transparently re-encrypted on retrieval.
+2. **Plaintext Fallback**: The temporary plaintext fallback migration behavior should be tightened/removed once all live tokens are confirmed encrypted.
+3. **Log Hygiene**: A prior local partial Gemini key prefix was printed in agent logs. Keep local logs clear of partial keys/prefixes.
+4. **Scan-loop throttling**: Not yet implemented (pending Phase 3).
+5. **Undo last scan**: Deferred to Phase 3.
 
 ## Phase 2C Live-Validation Checklist
 
 Complete every item below in order before committing or tagging.
 
-- [ ] 1. Apply migrations `001`, `002`, and `003` to the real Neon database and confirm each row in `schema_migrations`.
-- [ ] 2. Start the backend with the real `DBE91F0215_DATABASE_URL` and confirm a clean startup log.
-- [ ] 3. Validate the dashboard Google OAuth callback end-to-end: connect an account, confirm session cookie, confirm token row in `gmail_oauth_tokens`.
-- [ ] 4. Load the extension with the actual published extension ID; confirm `ALLOWED_EXTENSION_IDS` matches and pairing completes.
-- [ ] 5. Run a live dry-run (preview) Gmail scan through the dashboard; confirm no Gmail mutations and `dry_run = true` in `scan_runs`.
-- [ ] 6. Pair the extension with the backend using a live pairing code.
-- [ ] 7. Call `/api/extension/auth/me` with a valid bearer token and confirm the correct user and device are returned.
-- [ ] 8. Run a live Gemini classification request from the extension (`/api/extension/classify-preview`) and verify structured JSON output.
-- [ ] 9. Let the access token expire naturally (or advance the clock); perform one refresh and confirm the new token is accepted and the old token is rejected.
-- [ ] 10. Reuse the superseded refresh token and confirm the session is immediately revoked.
-- [ ] 11. Revoke the device from the dashboard and confirm subsequent refresh attempts fail with `401`.
-- [ ] 12. Verify browser CORS: an approved origin receives the correct headers; an unknown origin is rejected.
-- [ ] 13. Re-run all 25 backend tests, dashboard build, and extension typecheck/test/build/audit — all must pass.
+- [x] 1. Apply migrations `001`, `002`, and `003` to the real Neon database and confirm each row in `schema_migrations`.
+- [x] 2. Start the backend with the real `DBE91F0215_DATABASE_URL` and confirm a clean startup log.
+- [x] 3. Validate the dashboard Google OAuth callback end-to-end: connect an account, confirm session cookie, confirm token row in `gmail_oauth_tokens`.
+- [x] 4. Load the extension with the actual published extension ID; confirm `ALLOWED_EXTENSION_IDS` matches and pairing completes.
+- [x] 5. Run a live dry-run (preview) Gmail scan through the dashboard; confirm no Gmail mutations and `dry_run = true` in `scan_runs`.
+- [x] 6. Pair the extension with the backend using a live pairing code.
+- [x] 7. Call `/api/extension/auth/me` with a valid bearer token and confirm the correct user and device are returned.
+- [x] 8. Run a live Gemini classification request from the extension (`/api/extension/classify-preview`) and verify structured JSON output.
+- [x] 9. Let the access token expire naturally (or advance the clock); perform one refresh and confirm the new token is accepted and the old token is rejected.
+- [x] 10. Reuse the superseded refresh token and confirm the session is immediately revoked.
+- [x] 11. Revoke the device from the dashboard and confirm subsequent refresh attempts fail with `401`.
+- [x] 12. Verify browser CORS: an approved origin receives the correct headers; an unknown origin is rejected.
+- [x] 13. Re-run all 34 backend tests, dashboard build, and extension typecheck/test/build/audit — all must pass.
 - [ ] 14. Commit and tag only after every item above is checked off.
 
 > [!CAUTION]
-> No further Phase 3 feature development should occur before Phase 2C live validation is complete.
+> No further Phase 3 feature development should occur before pre-release hardening and final regressions are complete.
+

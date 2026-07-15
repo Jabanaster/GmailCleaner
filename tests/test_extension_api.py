@@ -16,9 +16,11 @@ def make_app(monkeypatch, engine, settings):
     monkeypatch.setenv("ALLOWED_WEB_ORIGINS", ",".join(settings.allowed_web_origins))
     monkeypatch.setenv("ALLOWED_EXTENSION_IDS", ",".join(settings.allowed_extension_ids))
     monkeypatch.setenv("JWT_SIGNING_SECRET", settings.jwt_signing_secret)
+    monkeypatch.setenv("OAUTH_TOKEN_ENCRYPTION_KEY", settings.oauth_token_encryption_key)
     monkeypatch.setattr(db, "_engine", engine)
     monkeypatch.setattr(routes, "init_db", lambda: None)
     return routes.create_app("does-not-exist")
+
 
 
 def session_cookie(settings, user_id: str, email: str) -> str:

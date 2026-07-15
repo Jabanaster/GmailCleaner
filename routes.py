@@ -50,8 +50,10 @@ def create_app(static_dir: str) -> FastAPI:
     def gmail_oauth_start(request: Request):
         try:
             state = secrets.token_urlsafe(32)
+            redirect_uri = gs.get_redirect_uri(request)
             request.session["oauth_state"] = state
-            auth_url = gs.get_auth_url(request, state)
+            request.session["oauth_redirect_uri"] = redirect_uri
+            auth_url = gs.get_auth_url(request, state, redirect_uri=redirect_uri)
             return {"auth_url": auth_url}
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -69,10 +71,12 @@ def create_app(static_dir: str) -> FastAPI:
         if not code:
             raise HTTPException(status_code=400, detail="No authorization code received")
         if not expected_state or not hmac.compare_digest(returned_state, expected_state):
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+            return RedirectResponse(url="/?oauth_error=invalid_state", status_code=302)
+
+        redirect_uri = request.session.pop("oauth_redirect_uri", None)
 
         try:
-            tokens = gs.exchange_code_for_tokens(code, request)
+            tokens = gs.exchange_code_for_tokens(code, request, redirect_uri=redirect_uri)
 
             # Get user email from token info
             access_token = tokens.get("access_token")
@@ -290,6 +294,34 @@ def create_app(static_dir: str) -> FastAPI:
         total_trashed = 0
         total_labeled = 0
 
+        # Load settings
+        settings = load_settings()
+        batch_size = settings.scan_batch_size
+        batch_delay = settings.scan_batch_delay_ms / 1000.0
+        quota_backoff = settings.gmail_quota_backoff_ms / 1000.0
+        max_retries = settings.gmail_max_retry_attempts
+
+        def execute_gmail_api_with_quota_backoff(api_func):
+            attempts = 0
+            while True:
+                try:
+                    return api_func()
+                except Exception as e:
+                    # Check if status code is 429 or 403 (standard Google rate limit/quota status codes)
+                    is_quota = False
+                    if hasattr(e, "resp") and getattr(e.resp, "status", None) in {429, 403}:
+                        is_quota = True
+                    
+                    if is_quota:
+                        attempts += 1
+                        if attempts <= max_retries:
+                            if quota_backoff > 0:
+                                time.sleep(quota_backoff * (2 ** (attempts - 1)))
+                            continue
+                        else:
+                            raise RuntimeError("Gmail API quota exceeded or rate limit hit. Scan stopped to prevent abuse.") from e
+                    raise e
+
         def fail(msg):
             with engine.connect() as conn:
                 conn.execute(text("""
@@ -301,10 +333,10 @@ def create_app(static_dir: str) -> FastAPI:
         try:
             # Ensure labels exist
             if not dry_run:
-                gs.ensure_labels_exist(user_email)
+                execute_gmail_api_with_quota_backoff(lambda: gs.ensure_labels_exist(user_email))
 
             # Fetch all message IDs
-            message_ids = gs.fetch_messages(user_email, max_results=max_results)
+            message_ids = execute_gmail_api_with_quota_backoff(lambda: gs.fetch_messages(user_email, max_results=max_results))
             total = len(message_ids)
 
             # Store total email count for progress tracking
@@ -315,16 +347,21 @@ def create_app(static_dir: str) -> FastAPI:
                 conn.commit()
 
             # Process in batches
-            batch_size = 10
             for i in range(0, total, batch_size):
+                # Batch pacing delay (except before first batch)
+                if i > 0 and batch_delay > 0:
+                    time.sleep(batch_delay)
+
                 batch = message_ids[i:i + batch_size]
 
                 # Fetch message details
                 email_details = []
                 for msg_ref in batch:
                     try:
-                        detail = gs.fetch_message_detail(user_email, msg_ref["id"])
+                        detail = execute_gmail_api_with_quota_backoff(lambda ref=msg_ref: gs.fetch_message_detail(user_email, ref["id"]))
                         email_details.append(detail)
+                    except RuntimeError as re:
+                        raise re
                     except Exception:
                         continue
 
@@ -344,10 +381,12 @@ def create_app(static_dir: str) -> FastAPI:
                         else:
                             # Move to trash
                             try:
-                                gs.trash_message(user_email, msg_id)
+                                execute_gmail_api_with_quota_backoff(lambda: gs.trash_message(user_email, msg_id))
                                 action_taken = "trashed"
                                 total_trashed += 1
                                 total_crap += 1
+                            except RuntimeError as re:
+                                raise re
                             except Exception:
                                 action_taken = "trash_failed"
                     elif cls["category"]:
@@ -360,10 +399,12 @@ def create_app(static_dir: str) -> FastAPI:
                             label_id = gs.get_label_id(user_email, cls["category"])
                             if label_id:
                                 try:
-                                    gs.add_label_to_message(user_email, msg_id, label_id)
+                                    execute_gmail_api_with_quota_backoff(lambda lid=label_id: gs.add_label_to_message(user_email, msg_id, lid))
                                     action_taken = "labeled"
                                     total_labeled += 1
                                     total_categorized += 1
+                                except RuntimeError as re:
+                                    raise re
                                 except Exception:
                                     action_taken = "label_failed"
 
@@ -419,6 +460,7 @@ def create_app(static_dir: str) -> FastAPI:
 
         except Exception as e:
             fail(str(e)[:500])
+
 
     # ─── Build FastAPI app ───
     app = FastAPI(debug=False)

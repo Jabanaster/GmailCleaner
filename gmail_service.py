@@ -15,6 +15,7 @@ RETRY_DELAY = 1.0  # seconds
 
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/userinfo.email",
 ]
 
 # Category labels we'll create in the user's Gmail
@@ -66,33 +67,107 @@ def retry_api_call(func, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
     raise last_exception
 
 
+def _is_google_host(host: str) -> bool:
+    hostname = host.lower().split(":")[0]
+    return hostname == "google.com" or hostname.endswith(".google.com")
+
+
+def _resolve_app_origin(request) -> str:
+    """Resolve the public dashboard origin used for OAuth redirect URIs."""
+    try:
+        settings = request.app.state.settings
+    except AttributeError:
+        from config import load_settings, Settings
+        try:
+            settings = load_settings()
+        except Exception:
+            web_origins = tuple(
+                value.strip()
+                for value in os.environ.get("ALLOWED_WEB_ORIGINS", "").split(",")
+                if value.strip()
+            )
+            if not web_origins:
+                web_origins = ("http://localhost:5173",)
+            settings = Settings(
+                app_env="development",
+                public_api_base_url=os.environ.get("PUBLIC_API_BASE_URL", "http://localhost:5273"),
+                allowed_web_origins=web_origins,
+                allowed_extension_ids=(),
+                jwt_issuer="google-email-organizer-api",
+                jwt_audience="google-email-organizer-extension",
+                jwt_signing_secret="dummy-signing-secret-at-least-32-characters-long",
+                access_token_ttl_seconds=600,
+                refresh_token_ttl_seconds=2592000,
+                pairing_code_ttl_seconds=600,
+                oauth_token_encryption_key="m1y6C2fHWhlS9v_P7r7Y1T3Nf8u_k3zL0d3J-5s3o9o=",
+                scan_batch_size=10,
+                scan_batch_delay_ms=1000,
+                gmail_quota_backoff_ms=5000,
+                gmail_max_retry_attempts=3,
+            )
+
+
+    
+    # Whitelist of allowed origins
+    allowed = [origin.rstrip("/") for origin in settings.allowed_web_origins]
+    if settings.public_api_base_url:
+        allowed.append(settings.public_api_base_url.rstrip("/"))
+        
+    custom_domain = os.environ.get("WORKSHOP_CUSTOM_DOMAIN")
+    if custom_domain:
+        allowed.append(f"https://{custom_domain.strip()}")
+        
+    # Build list of potential candidates from request headers
+    candidates = []
+    
+    origin = request.headers.get("origin")
+    if origin:
+        candidates.append(origin.rstrip("/"))
+        
+    referer = request.headers.get("referer")
+    if referer:
+        from urllib.parse import urlparse
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            candidates.append(f"{parsed.scheme}://{parsed.netloc}".rstrip("/"))
+            
+    xfh = request.headers.get("x-forwarded-host")
+    if xfh:
+        xfh = xfh.split(",")[0].strip()
+        xfp = request.headers.get("x-forwarded-proto") or request.url.scheme
+        candidates.append(f"{xfp}://{xfh}".rstrip("/"))
+        
+    host = request.headers.get("host")
+    if host:
+        host = host.split(",")[0].strip()
+        xfp = request.headers.get("x-forwarded-proto") or request.url.scheme
+        candidates.append(f"{xfp}://{host}".rstrip("/"))
+
+    # Match candidates against whitelisted allowed origins
+    for c in candidates:
+        if c in allowed:
+            return c
+
+    if allowed:
+        return allowed[0]
+        
+    raise ValueError(
+        "Cannot determine redirect URI — no trusted origin found in ALLOWED_WEB_ORIGINS"
+    )
+
+
 def get_redirect_uri(request) -> str:
     """Build the OAuth redirect URI from the request origin."""
-    origin = None
-    if os.environ.get("WORKSHOP_CUSTOM_DOMAIN"):
-        origin = f"https://{os.environ['WORKSHOP_CUSTOM_DOMAIN']}"
-    else:
-        origin = request.headers.get("origin") or request.headers.get("referer", "").rstrip("/")
-        if not origin:
-            # Fallback: construct from forwarded headers
-            host = request.headers.get("x-forwarded-host", "")
-            proto = request.headers.get("x-forwarded-proto", "https")
-            if host:
-                origin = f"{proto}://{host}"
-
-    if not origin:
-        raise ValueError("Cannot determine redirect URI — no origin/referer header")
-
-    return f"{origin}/api/gmail/oauth/callback"
+    return f"{_resolve_app_origin(request)}/api/gmail/oauth/callback"
 
 
-def get_auth_url(request, state: str) -> str:
+def get_auth_url(request, state: str, redirect_uri: str | None = None) -> str:
     """Generate the Google OAuth consent URL."""
     config = get_oauth_config()
     if not config["configured"]:
         raise ValueError("Google OAuth client ID/secret not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets.")
 
-    redirect_uri = get_redirect_uri(request)
+    redirect_uri = redirect_uri or get_redirect_uri(request)
 
     params = {
         "client_id": config["client_id"],
@@ -110,10 +185,10 @@ def get_auth_url(request, state: str) -> str:
 
 
 
-def exchange_code_for_tokens(code: str, request) -> dict:
+def exchange_code_for_tokens(code: str, request, redirect_uri: str | None = None) -> dict:
     """Exchange authorization code for access + refresh tokens."""
     config = get_oauth_config()
-    redirect_uri = get_redirect_uri(request)
+    redirect_uri = redirect_uri or get_redirect_uri(request)
 
     data = {
         "code": code,
@@ -147,9 +222,16 @@ def refresh_access_token(refresh_token: str) -> dict:
 
 def store_tokens(user_email: str, tokens: dict):
     """Store OAuth tokens in the database."""
+    from config import load_settings
+    from encryption_utils import encrypt_token
+
+    settings = load_settings()
     engine = get_engine()
     expiry_ts = tokens.get("expires_in", 3600)
     expiry = datetime.now(timezone.utc).timestamp() + expiry_ts
+
+    raw_refresh = tokens.get("refresh_token")
+    enc_refresh = encrypt_token(raw_refresh, settings.oauth_token_encryption_key) if raw_refresh else None
 
     with engine.connect() as conn:
         conn.execute(text("""
@@ -164,7 +246,7 @@ def store_tokens(user_email: str, tokens: dict):
         """), {
             "email": user_email,
             "access_token": tokens.get("access_token"),
-            "refresh_token": tokens.get("refresh_token"),
+            "refresh_token": enc_refresh,
             "expiry": expiry,
             "scopes": " ".join(GMAIL_SCOPES),
         })
@@ -173,6 +255,11 @@ def store_tokens(user_email: str, tokens: dict):
 
 def get_stored_tokens(user_email: str) -> dict | None:
     """Retrieve stored OAuth tokens for a user, refreshing if needed."""
+    from config import load_settings
+    from encryption_utils import decrypt_token
+    from cryptography.fernet import InvalidToken
+
+    settings = load_settings()
     engine = get_engine()
     with engine.connect() as conn:
         result = conn.execute(text("""
@@ -185,22 +272,43 @@ def get_stored_tokens(user_email: str) -> dict | None:
 
     email, access_token, refresh_token, expiry = result
 
+    if expiry and isinstance(expiry, str):
+        try:
+            if expiry.endswith("Z"):
+                expiry = expiry[:-1] + "+00:00"
+            expiry = datetime.fromisoformat(expiry)
+        except ValueError:
+            expiry = None
+
+
+    decrypted_refresh = None
+    if refresh_token:
+        try:
+            decrypted_refresh = decrypt_token(refresh_token, settings.oauth_token_encryption_key)
+        except InvalidToken:
+            # Stored token is plaintext (or key mismatch). Fail closed for safety.
+            import logging
+            logging.warning("Failed to decrypt stored Gmail refresh token; invalid or unencrypted token format.")
+            return None
+
+
     # Check if token is expired (with 60s buffer)
     now_ts = datetime.now(timezone.utc).timestamp()
     if expiry and expiry.timestamp() <= now_ts + 60:
-        if refresh_token:
+        if decrypted_refresh:
             try:
-                new_tokens = refresh_access_token(refresh_token)
+                new_tokens = refresh_access_token(decrypted_refresh)
                 store_tokens(email, new_tokens)
                 return {
                     "access_token": new_tokens["access_token"],
-                    "refresh_token": refresh_token,
+                    "refresh_token": decrypted_refresh,
                 }
             except Exception:
                 return None
         return None
 
-    return {"access_token": access_token, "refresh_token": refresh_token}
+    return {"access_token": access_token, "refresh_token": decrypted_refresh}
+
 
 
 def get_connected_email() -> str | None:
