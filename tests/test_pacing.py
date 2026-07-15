@@ -69,7 +69,8 @@ def test_batch_size_and_pacing_invoked(monkeypatch, engine, settings):
         scan_batch_size=2,
         scan_batch_delay_ms=250,
         gmail_quota_backoff_ms=0,
-        gmail_max_retry_attempts=3
+        gmail_max_retry_attempts=3,
+        min_classification_confidence=0.80,
     )
 
 
@@ -140,7 +141,8 @@ def test_quota_error_triggers_backoff_and_fails(monkeypatch, engine, settings):
         scan_batch_size=10,
         scan_batch_delay_ms=0,
         gmail_quota_backoff_ms=500,
-        gmail_max_retry_attempts=2
+        gmail_max_retry_attempts=2,
+        min_classification_confidence=0.80,
     )
 
 

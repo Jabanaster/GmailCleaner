@@ -25,6 +25,7 @@ class Settings:
     scan_batch_delay_ms: int
     gmail_quota_backoff_ms: int
     gmail_max_retry_attempts: int
+    min_classification_confidence: float
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -71,10 +72,11 @@ def load_settings() -> Settings:
         scan_batch_delay_ms = int(os.getenv("SCAN_BATCH_DELAY_MS", "1000"))
         gmail_quota_backoff_ms = int(os.getenv("GMAIL_QUOTA_BACKOFF_MS", "5000"))
         gmail_max_retry_attempts = int(os.getenv("GMAIL_MAX_RETRY_ATTEMPTS", "3"))
-        if scan_batch_size <= 0 or scan_batch_delay_ms < 0 or gmail_quota_backoff_ms < 0 or gmail_max_retry_attempts < 0:
+        min_classification_confidence = float(os.getenv("MIN_CLASSIFICATION_CONFIDENCE", "0.80"))
+        if scan_batch_size <= 0 or scan_batch_delay_ms < 0 or gmail_quota_backoff_ms < 0 or gmail_max_retry_attempts < 0 or not (0.0 <= min_classification_confidence <= 1.0):
             raise ValueError()
     except Exception:
-        raise RuntimeError("Scan pacing settings (SCAN_BATCH_SIZE, SCAN_BATCH_DELAY_MS, GMAIL_QUOTA_BACKOFF_MS, GMAIL_MAX_RETRY_ATTEMPTS) must be non-negative integers (SCAN_BATCH_SIZE must be > 0)")
+        raise RuntimeError("Scan pacing settings must be non-negative integers and confidence must be a float between 0.0 and 1.0")
 
     return Settings(
         app_env=env,
@@ -92,6 +94,7 @@ def load_settings() -> Settings:
         scan_batch_delay_ms=scan_batch_delay_ms,
         gmail_quota_backoff_ms=gmail_quota_backoff_ms,
         gmail_max_retry_attempts=gmail_max_retry_attempts,
+        min_classification_confidence=min_classification_confidence,
     )
 
 

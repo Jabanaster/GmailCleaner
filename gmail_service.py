@@ -104,6 +104,7 @@ def _resolve_app_origin(request) -> str:
                 scan_batch_delay_ms=1000,
                 gmail_quota_backoff_ms=5000,
                 gmail_max_retry_attempts=3,
+                min_classification_confidence=0.80,
             )
 
 

@@ -35,6 +35,7 @@ def settings():
         scan_batch_delay_ms=0,
         gmail_quota_backoff_ms=0,
         gmail_max_retry_attempts=3,
+        min_classification_confidence=0.80,
     )
 
 

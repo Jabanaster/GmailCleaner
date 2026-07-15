@@ -108,6 +108,7 @@ def test_invalid_encryption_key_fails(engine, monkeypatch, settings):
         scan_batch_delay_ms=settings.scan_batch_delay_ms,
         gmail_quota_backoff_ms=settings.gmail_quota_backoff_ms,
         gmail_max_retry_attempts=settings.gmail_max_retry_attempts,
+        min_classification_confidence=0.80,
     )
 
     
