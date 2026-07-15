@@ -64,3 +64,13 @@ export interface CategoryBreakdown {
 export interface ScanHistory {
   history: ScanRun[];
 }
+
+export interface DeviceSession {
+  id: string;
+  device_name: string;
+  extension_version: string | null;
+  created_at: string | null;
+  last_seen_at: string | null;
+  revoked: boolean;
+}
+
