@@ -134,6 +134,106 @@ def create_app(static_dir: str) -> FastAPI:
         request.session.clear()
         return {"ok": True}
 
+    # ─── Delete Account & Purge Data ───
+    @api.delete("/user/account")
+    def delete_user_account(request: Request):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        user_id = None
+        user_deleted = False
+        tokens_deleted = 0
+        device_sessions_deleted = 0
+        scan_records_deleted = 0
+        logs_deleted = 0
+
+        engine = get_engine()
+        with engine.begin() as conn:
+            # 1. Get user_id if any
+            user = conn.execute(text("""
+                SELECT id FROM organizer_users WHERE LOWER(email) = LOWER(:email)
+            """), {"email": email}).fetchone()
+            if user:
+                user_id = user[0]
+
+            # 2. Fetch tokens first so we can revoke them remotely after deletion
+            token_row = conn.execute(text("""
+                SELECT refresh_token FROM gmail_oauth_tokens WHERE LOWER(email) = LOWER(:email)
+            """), {"email": email}).fetchone()
+            refresh_token = token_row[0] if token_row else None
+
+            # 3. Perform cascading deletes in correct FK order
+            logs_deleted += conn.execute(text("""
+                DELETE FROM recovery_action_logs WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            logs_deleted += conn.execute(text("""
+                DELETE FROM email_action_logs WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            scan_records_deleted += conn.execute(text("""
+                DELETE FROM operation_batches WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            logs_deleted += conn.execute(text("""
+                DELETE FROM email_classifications WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            scan_records_deleted += conn.execute(text("""
+                DELETE FROM scan_runs WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            conn.execute(text("""
+                DELETE FROM gmail_labels WHERE LOWER(user_email) = LOWER(:email)
+            """), {"email": email})
+
+            tokens_deleted = conn.execute(text("""
+                DELETE FROM gmail_oauth_tokens WHERE LOWER(email) = LOWER(:email)
+            """), {"email": email}).rowcount or 0
+
+            if user_id:
+                logs_deleted += conn.execute(text("""
+                    DELETE FROM extension_audit_events WHERE user_id = :user_id
+                """), {"user_id": user_id}).rowcount or 0
+
+            # Delete extension sessions and pairing codes before user row
+            if user_id:
+                device_sessions_deleted = conn.execute(text("""
+                    DELETE FROM extension_device_sessions WHERE user_id = :user_id
+                """), {"user_id": user_id}).rowcount or 0
+
+                conn.execute(text("""
+                    DELETE FROM extension_pairing_codes WHERE user_id = :user_id
+                """), {"user_id": user_id})
+
+            if user_id:
+                user_deleted = (conn.execute(text("""
+                    DELETE FROM organizer_users WHERE id = :user_id
+                """), {"user_id": user_id}).rowcount or 0) > 0
+
+        # 5. Revoke tokens remotely
+        if refresh_token:
+            try:
+                import httpx
+                httpx.post(
+                    f"https://oauth2.googleapis.com/revoke?token={refresh_token}",
+                    timeout=10.0,
+                )
+            except Exception:
+                pass
+
+        request.session.clear()
+
+        return {
+            "deleted_user_metadata": user_deleted,
+            "deleted_tokens": tokens_deleted > 0,
+            "deleted_device_sessions": device_sessions_deleted,
+            "deleted_scan_recovery_records": scan_records_deleted,
+            "deleted_classifications_logs": logs_deleted,
+        }
+
+
     # ─── Scan status ───
     @api.get("/scan/status")
     def scan_status(request: Request):
