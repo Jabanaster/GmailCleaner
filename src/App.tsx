@@ -43,6 +43,8 @@ import { ChartsTab } from "@/components/ChartsTab";
 import { ReviewQueueTab } from "@/components/ReviewQueueTab";
 import { HistoryTab } from "@/components/HistoryTab";
 import { DevicesTab } from "@/components/DevicesTab";
+import { RecoveryTab } from "@/components/RecoveryTab";
+
 
 // ─── Dark mode hook ───────────────────────────────────────────────────────────
 
@@ -486,6 +488,9 @@ function AppContent() {
                 </Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="recovery" className="gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" /> Recovery
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="charts">
@@ -507,6 +512,10 @@ function AppContent() {
               onCreateCode={handleCreatePairingCode}
               onRefresh={fetchDevices}
             />
+          </TabsContent>
+
+          <TabsContent value="recovery">
+            <RecoveryTab />
           </TabsContent>
         </Tabs>
       </main>

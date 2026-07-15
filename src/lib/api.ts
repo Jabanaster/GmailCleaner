@@ -1,4 +1,5 @@
-import type { GmailStatus, GmailProfile, ScanStatus, ScanHistory, CategoryBreakdown, DeviceSession } from "@/types";
+import type { GmailStatus, GmailProfile, ScanStatus, ScanHistory, CategoryBreakdown, DeviceSession, RecoveryPreviewResponse, RecoveryExecuteResponse } from "@/types";
+
 
 export const api = {
   getGmailStatus: async (): Promise<GmailStatus> => {
@@ -73,4 +74,36 @@ export const api = {
       throw new Error("Could not revoke device");
     }
   },
+
+  getRecoveryPreview: async (params: { operation_batch_id?: number; scan_run_id?: number }): Promise<RecoveryPreviewResponse> => {
+    const res = await fetch("/api/recovery/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.detail || "Failed to load recovery preview");
+    }
+    return data;
+  },
+
+  executeRecovery: async (params: {
+    operation_batch_id?: number;
+    scan_run_id?: number;
+    confirm_execute: boolean;
+    handle_high_risk?: boolean;
+  }): Promise<RecoveryExecuteResponse> => {
+    const res = await fetch("/api/recovery/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.detail || "Failed to execute recovery");
+    }
+    return data;
+  },
 };
+

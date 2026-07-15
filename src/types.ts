@@ -74,3 +74,40 @@ export interface DeviceSession {
   revoked: boolean;
 }
 
+// ─── Recovery ───
+export interface RecoveryMessagePreview {
+  gmail_message_id: string;
+  executed_action: string;
+  planned_recovery_action: string;
+  recoverable: boolean;
+  risk_level: "low" | "high";
+  reason: string;
+  category: string | null;
+  confidence: number;
+}
+
+export interface RecoveryPreviewResponse {
+  operation_batch_id: number;
+  scan_run_id: number;
+  dry_run: boolean;
+  batch_status: string;
+  total_actions: number;
+  recoverable_count: number;
+  skipped_count: number;
+  high_risk_count: number;
+  warning_list: string[];
+  per_message_preview: RecoveryMessagePreview[];
+}
+
+export interface RecoveryExecuteResponse {
+  operation_batch_id: number;
+  scan_run_id: number;
+  attempted: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  high_risk_skipped: number;
+  warnings: string[];
+}
+
+
