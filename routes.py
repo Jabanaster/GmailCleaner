@@ -21,6 +21,12 @@ import classifier as clf
 from config import load_settings
 from extension_auth import upsert_dashboard_user
 from extension_routes import create_extension_router
+from recovery_utils import generate_recovery_preview
+
+class RecoveryPreviewRequest(BaseModel):
+    operation_batch_id: int | None = None
+    scan_run_id: int | None = None
+
 
 
 def create_app(static_dir: str) -> FastAPI:
@@ -289,6 +295,24 @@ def create_app(static_dir: str) -> FastAPI:
             conn.commit()
 
         return {"ok": True, "message": "Scan stop initiated"}
+
+    @api.post("/recovery/preview")
+    def recovery_preview(request: Request, body: RecoveryPreviewRequest):
+        email = request.session.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Dashboard authentication required")
+
+        if body.operation_batch_id is None and body.scan_run_id is None:
+            raise HTTPException(status_code=400, detail="Either operation_batch_id or scan_run_id must be provided")
+
+        engine = get_engine()
+        val = body.operation_batch_id if body.operation_batch_id is not None else body.scan_run_id
+        preview = generate_recovery_preview(email, val, engine)
+        if not preview:
+            raise HTTPException(status_code=404, detail="Operation batch or scan run not found")
+
+        return preview
+
 
 
     # ─── Get run history ───
