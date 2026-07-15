@@ -39,44 +39,90 @@ def load_settings() -> Settings:
     web_origins = _csv("ALLOWED_WEB_ORIGINS")
     extension_ids = _csv("ALLOWED_EXTENSION_IDS")
     encryption_key = os.getenv("OAUTH_TOKEN_ENCRYPTION_KEY", "")
+    errors: list[str] = []
 
+    # ── JWT signing secret strength ──────────────────────────────────────────
     if len(secret) < 32 or secret.lower() in {"changeme", "change-me", "placeholder", "secret"}:
-        raise RuntimeError("JWT_SIGNING_SECRET must be a non-placeholder secret of at least 32 characters")
-    if "*" in web_origins:
-        raise RuntimeError("Wildcard CORS origins are forbidden")
-    
-    # Validate token encryption key
-    if not encryption_key:
-        raise RuntimeError("OAUTH_TOKEN_ENCRYPTION_KEY is required and must be set in the environment")
-    try:
-        import base64
-        key_bytes = base64.urlsafe_b64decode(encryption_key)
-        if len(key_bytes) != 32:
-            raise ValueError()
-    except Exception:
-        raise RuntimeError("OAUTH_TOKEN_ENCRYPTION_KEY must be a valid 32-byte URL-safe base64-encoded key")
+        errors.append("JWT_SIGNING_SECRET must be a non-placeholder secret of at least 32 characters")
 
+    # ── Wildcard CORS origin is always forbidden ─────────────────────────────
+    if "*" in web_origins:
+        errors.append("Wildcard CORS origins are forbidden")
+
+    # ── Token encryption key ─────────────────────────────────────────────────
+    encryption_key_valid = False
+    if not encryption_key:
+        errors.append("OAUTH_TOKEN_ENCRYPTION_KEY is required and must be set in the environment")
+    else:
+        try:
+            import base64
+            key_bytes = base64.urlsafe_b64decode(encryption_key)
+            if len(key_bytes) != 32:
+                raise ValueError("key length")
+            encryption_key_valid = True
+        except Exception:
+            errors.append("OAUTH_TOKEN_ENCRYPTION_KEY must be a valid 32-byte URL-safe base64-encoded key")
+
+    # ── Public API base URL must use HTTPS outside loopback development ───────
     parsed = urlparse(public_url)
     is_loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if parsed.scheme != "https" and not (env == "development" and parsed.scheme == "http" and is_loopback):
-        raise RuntimeError("PUBLIC_API_BASE_URL must use HTTPS outside loopback development")
-    if env == "production":
-        if not extension_ids:
-            raise RuntimeError("ALLOWED_EXTENSION_IDS must not be empty in production")
-        if os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}:
-            raise RuntimeError("Debug mode is forbidden in production")
+        errors.append("PUBLIC_API_BASE_URL must use HTTPS outside loopback development")
 
-    # Load and validate scan loop batch/delay settings
+    # ── Production-only guards ───────────────────────────────────────────────
+    if env == "production":
+        # Extension IDs must be explicit
+        if not extension_ids:
+            errors.append("ALLOWED_EXTENSION_IDS must not be empty in production")
+
+        # Debug mode forbidden
+        if os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}:
+            errors.append("DEBUG mode is forbidden in production")
+
+        # Database URL must be present
+        if not os.getenv("DBE91F0215_DATABASE_URL", "").strip():
+            errors.append("DBE91F0215_DATABASE_URL must be set in production")
+
+        # Google OAuth client credentials must be present
+        if not os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip():
+            errors.append("GOOGLE_OAUTH_CLIENT_ID must be set in production")
+        if not os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip():
+            errors.append("GOOGLE_OAUTH_CLIENT_SECRET must be set in production (value not shown)")
+
+        # All allowed web origins must use HTTPS in production
+        non_https = [o for o in web_origins if not o.startswith("https://")]
+        if non_https:
+            errors.append(
+                f"All ALLOWED_WEB_ORIGINS must use HTTPS in production "
+                f"({len(non_https)} non-HTTPS origin(s) found)"
+            )
+
+    # ── Raise a single sanitized error (never prints secret values) ──────────
+    if errors:
+        raise RuntimeError(
+            "Configuration error(s) — secret values omitted:\n" +
+            "\n".join(f"  • {e}" for e in errors)
+        )
+
+    # ── Scan loop pacing settings ────────────────────────────────────────────
     try:
         scan_batch_size = int(os.getenv("SCAN_BATCH_SIZE", "10"))
         scan_batch_delay_ms = int(os.getenv("SCAN_BATCH_DELAY_MS", "1000"))
         gmail_quota_backoff_ms = int(os.getenv("GMAIL_QUOTA_BACKOFF_MS", "5000"))
         gmail_max_retry_attempts = int(os.getenv("GMAIL_MAX_RETRY_ATTEMPTS", "3"))
         min_classification_confidence = float(os.getenv("MIN_CLASSIFICATION_CONFIDENCE", "0.80"))
-        if scan_batch_size <= 0 or scan_batch_delay_ms < 0 or gmail_quota_backoff_ms < 0 or gmail_max_retry_attempts < 0 or not (0.0 <= min_classification_confidence <= 1.0):
+        if (
+            scan_batch_size <= 0
+            or scan_batch_delay_ms < 0
+            or gmail_quota_backoff_ms < 0
+            or gmail_max_retry_attempts < 0
+            or not (0.0 <= min_classification_confidence <= 1.0)
+        ):
             raise ValueError()
     except Exception:
-        raise RuntimeError("Scan pacing settings must be non-negative integers and confidence must be a float between 0.0 and 1.0")
+        raise RuntimeError(
+            "Scan pacing settings must be non-negative integers and confidence must be a float between 0.0 and 1.0"
+        )
 
     return Settings(
         app_env=env,
@@ -96,5 +142,3 @@ def load_settings() -> Settings:
         gmail_max_retry_attempts=gmail_max_retry_attempts,
         min_classification_confidence=min_classification_confidence,
     )
-
-
