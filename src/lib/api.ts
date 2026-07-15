@@ -59,6 +59,22 @@ export const api = {
     return data;
   },
 
+  pauseScan: async (): Promise<void> => {
+    const res = await fetch("/api/scan/pause", { method: "POST" });
+    if (!res.ok) throw new Error("Failed to pause scan");
+  },
+
+  resumeScan: async (): Promise<void> => {
+    const res = await fetch("/api/scan/resume", { method: "POST" });
+    if (!res.ok) throw new Error("Failed to resume scan");
+  },
+
+  stopScan: async (): Promise<void> => {
+    const res = await fetch("/api/scan/stop", { method: "POST" });
+    if (!res.ok) throw new Error("Failed to stop scan");
+  },
+
+
   createPairingCode: async (): Promise<{ pairing_code: string; expires_at: string }> => {
     const res = await fetch("/api/extension/pairing-codes", { method: "POST" });
     const data = await res.json();

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Mail,
   Trash2,
@@ -33,6 +34,8 @@ import {
   Clock,
   Cpu,
   X,
+  Pause,
+  ShieldAlert,
 } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -44,6 +47,9 @@ import { ReviewQueueTab } from "@/components/ReviewQueueTab";
 import { HistoryTab } from "@/components/HistoryTab";
 import { DevicesTab } from "@/components/DevicesTab";
 import { RecoveryTab } from "@/components/RecoveryTab";
+import { OnboardingChecklist } from "@/components/OnboardingChecklist";
+import { DryRunPreviewPanel } from "@/components/DryRunPreviewPanel";
+
 
 
 // ─── Dark mode hook ───────────────────────────────────────────────────────────
@@ -85,7 +91,10 @@ function AppContent() {
   const [pairingCountdown, setPairingCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [dark, setDark] = useDarkMode();
+  const [showFullScanConfirm, setShowFullScanConfirm] = useState(false);
   const { toast } = useToast();
+
+
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -184,6 +193,37 @@ function AppContent() {
       toast({ title: "Error", description: err.message || "Failed to start scan", variant: "destructive" });
     } finally { setScanning(false); }
   };
+
+  const handlePauseScan = async () => {
+    try {
+      await api.pauseScan();
+      await fetchStatus();
+      toast({ title: "Scan Paused", description: "The active scan has been paused." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to pause scan", variant: "destructive" });
+    }
+  };
+
+  const handleResumeScan = async () => {
+    try {
+      await api.resumeScan();
+      await fetchStatus();
+      toast({ title: "Scan Resumed", description: "The paused scan has been resumed." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to resume scan", variant: "destructive" });
+    }
+  };
+
+  const handleStopScan = async () => {
+    try {
+      await api.stopScan();
+      await fetchStatus();
+      toast({ title: "Scan Stop Initiated", description: "The active scan is stopping." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to stop scan", variant: "destructive" });
+    }
+  };
+
 
   const handleCreatePairingCode = async () => {
     try {
@@ -346,6 +386,11 @@ function AppContent() {
           </div>
         )}
 
+        <OnboardingChecklist
+          gmailConnected={gmailStatus?.connected ?? false}
+          hasActiveDevices={devices.filter((d) => !d.revoked).length > 0}
+        />
+
         {/* Stat cards */}
         <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard
@@ -396,8 +441,8 @@ function AppContent() {
               )}
               {isRunning && (
                 <Badge variant="secondary" className="ml-auto text-xs bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400">
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  Running
+                  <Loader2 className={`mr-1 h-3 w-3 ${lastRun?.status !== "paused" ? "animate-spin" : ""}`} />
+                  <span className="capitalize">{lastRun?.status}</span>
                 </Badge>
               )}
             </CardTitle>
@@ -426,9 +471,25 @@ function AppContent() {
                 )}
                 <p className="text-xs text-muted-foreground">
                   {lastRun?.dry_run
-                    ? "Classifying emails in preview mode. No messages will be moved or labeled."
+                    ? "Classifying emails in preview mode. No messages will be modified or labeled."
                     : "Sorting into categories and removing junk. This may take a few minutes."}
                 </p>
+
+                {/* Scan Lifecycle Control Buttons */}
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/40">
+                  {lastRun?.status === "paused" ? (
+                    <Button onClick={handleResumeScan} size="sm" variant="outline" className="text-xs gap-1.5 h-8">
+                      <Play className="h-3.5 w-3.5" style={{ width: 14, height: 14 }} /> Resume Scan
+                    </Button>
+                  ) : (
+                    <Button onClick={handlePauseScan} size="sm" variant="outline" className="text-xs gap-1.5 h-8">
+                      <Pause className="h-3.5 w-3.5" style={{ width: 14, height: 14 }} /> Pause Scan
+                    </Button>
+                  )}
+                  <Button onClick={handleStopScan} size="sm" variant="destructive" className="text-xs gap-1.5 h-8">
+                    <X className="h-3.5 w-3.5" style={{ width: 14, height: 14 }} /> Stop Scan
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -455,7 +516,7 @@ function AppContent() {
                     {scanning ? "Starting…" : "Preview Scan (Dry Run)"}
                   </Button>
                   <Button
-                    onClick={() => handleStartScan(false)}
+                    onClick={() => setShowFullScanConfirm(true)}
                     disabled={scanning}
                     className="gradient-primary text-white hover:opacity-90 transition-opacity shadow-md shrink-0"
                   >
@@ -467,6 +528,46 @@ function AppContent() {
             )}
           </CardContent>
         </Card>
+
+        {/* Dry-run classification results preview */}
+        <DryRunPreviewPanel
+          classifications={scanStatus?.classifications ?? []}
+          isDryRun={Boolean(lastRun?.dry_run)}
+        />
+
+        {/* Full Scan Confirmation Dialog */}
+        <Dialog open={showFullScanConfirm} onOpenChange={setShowFullScanConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-destructive">
+                <ShieldAlert className="h-5 w-5" />
+                Confirm Full Scan Execution
+              </DialogTitle>
+              <DialogDescription className="text-xs pt-1">
+                You are about to start a full scan. This operation will modify your Gmail inbox.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2 text-xs border-y border-border/50 my-2">
+              <p>
+                Unlike a dry-run, a full scan will perform live mutations in your Gmail account (categorizing, trashing junk emails, and sorting into folders).
+              </p>
+              <p className="font-semibold text-destructive">
+                We recommend performing a Dry Run first to preview the proposed actions.
+              </p>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button variant="outline" onClick={() => setShowFullScanConfirm(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={() => {
+                setShowFullScanConfirm(false);
+                handleStartScan(false);
+              }}>
+                Confirm & Start
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Tabs */}
         <Tabs defaultValue="charts" className="w-full">
